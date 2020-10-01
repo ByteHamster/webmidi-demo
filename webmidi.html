@@ -1,0 +1,318 @@
+<html>
+    <head>
+        <title>WebMidi</title>
+        <style>
+        * {
+            margin: 0px;
+            padding: 0px;
+            box-sizing: border-box;
+        }
+        </style>
+        <script src="https://raw.githubusercontent.com/cwilso/WebMIDIAPIShim/gh-pages/build/WebMIDIAPI.min.js"></script> 
+    </head>
+    <body style="background:#000;">
+        <canvas id="canvas" style="width:100%;height:100%;position:absolute;"></canvas>
+        <canvas id="fireCanvas" style="width:100%;height:250px;position:absolute;z-index:-1;bottom:40px;"></canvas>
+    </body>
+</html>
+
+<script>
+
+function getRainbowColorRaw() {
+    numOfSteps = 10;
+    rainbowStep = (Date.now() / 1000) % numOfSteps;
+    // This function generates vibrant, "evenly spaced" colours (i.e. no clustering). This is ideal for creating easily distinguishable vibrant markers in Google Maps and other apps.
+    // Adam Cole, 2011-Sept-14
+    // HSV to RBG adapted from: http://mjijackson.com/2008/02/rgb-to-hsl-and-rgb-to-hsv-color-model-conversion-algorithms-in-javascript
+    var r, g, b;
+    var h = rainbowStep / numOfSteps;
+    var i = ~~(h * 6);
+    var f = h * 6 - i;
+    var q = 1 - f;
+    switch(i % 6){
+        case 0: r = 1; g = f; b = 0; break;
+        case 1: r = q; g = 1; b = 0; break;
+        case 2: r = 0; g = 1; b = f; break;
+        case 3: r = 0; g = q; b = 1; break;
+        case 4: r = f; g = 0; b = 1; break;
+        case 5: r = 1; g = 0; b = q; break;
+    }
+    return {r:r,g:g,b:b};
+}
+
+function getRainbowColor() {
+    color = getRainbowColorRaw();
+    return "#" + ("00" + (~ ~(color.r * 255)).toString(16)).slice(-2) + ("00" + (~ ~(color.g * 255)).toString(16)).slice(-2) + ("00" + (~ ~(color.b * 255)).toString(16)).slice(-2);
+}
+
+
+var noteHistory = [];
+var canvas = document.getElementById('canvas');
+var context = canvas.getContext('2d');
+var SPEED = 0.03;
+
+window.addEventListener('resize', resizeCanvas, false);
+function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    drawStuff(); 
+}
+resizeCanvas();
+
+function drawStuff() {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.lineCap = "round";
+    
+    context.beginPath();
+    context.lineWidth = 3;
+    context.moveTo(50, canvas.height - 40);
+    context.lineTo(canvas.width - 50, canvas.height - 40);
+    context.strokeStyle = '#aaa';
+    context.stroke();
+        
+        
+    for (var i=0; i < noteHistory.length; i++) {
+        var note = noteHistory[i];
+        context.beginPath();
+        context.lineWidth = Math.max(6, 50 - 0.05 * (Date.now() - note.end));
+        if (Date.now() < note.end) {
+            context.lineWidth = 50
+        }
+        yfrom = canvas.height + SPEED * (note.start - Date.now());
+        yto = canvas.height + SPEED * (note.end - Date.now());
+        yto = Math.min(canvas.height, yto)
+        x = (canvas.width / 91) * (note.note - 19);
+        context.moveTo(x, yfrom - 40);
+        context.lineTo(x, yto - 40);
+        context.strokeStyle = note.color;
+        context.stroke();
+        
+        if (yto < -100) {
+            //Remove off-screen items
+            noteHistory.splice(i, 1);
+            i--;
+        }
+    }
+}
+
+ /*
+  Provides requestAnimationFrame in a cross browser way.
+  http://paulirish.com/2011/requestanimationframe-for-smart-animating/
+ */
+
+if (!window.requestAnimationFrame) {
+    window.requestAnimationFrame = (function() {
+        return window.webkitRequestAnimationFrame ||
+            window.mozRequestAnimationFrame || // comment out if FF4 is slow (it caps framerate at ~30fps: https://bugzilla.mozilla.org/show_bug.cgi?id=630127)
+        window.oRequestAnimationFrame ||
+            window.msRequestAnimationFrame ||
+            function( /* function FrameRequestCallback */ callback, /* DOMElement Element */ element) {
+                window.setTimeout(callback, 1000 / 60);
+        };
+    })();
+
+}
+
+animate();
+
+function animate() {
+    requestAnimationFrame(animate);
+    drawStuff();
+}
+
+
+function noteOn(note, velocity) {
+    var newNote = {
+        note: note,
+        color: getRainbowColor(),
+        start: Date.now(),
+        end: Date.now() + 1000*3600 // Temporary: Long time
+    };
+    noteHistory.unshift(newNote); // Add front
+}
+
+function noteOff(note) {
+    for (var i=0; i < noteHistory.length; i++) {
+        if (noteHistory[i].note == note) {
+            noteHistory[i].end = Date.now();
+            break;
+        }
+    }
+}
+
+function getMIDIMessage(message) {
+    var command = message.data[0];
+    var note = message.data[1];
+    var velocity = (message.data.length > 2) ? message.data[2] : 0; // a velocity value might not be included with a noteOff command
+
+    switch (command) {
+        case 144: // noteOn
+            if (velocity > 0) {
+                noteOn(note, velocity);
+            } else {
+                noteOff(note);
+            }
+            break;
+        case 128: // noteOff
+            noteOff(note);
+            break;
+    }
+}
+
+navigator.requestMIDIAccess()
+    .then(onMIDISuccess, onMIDIFailure);
+
+function onMIDISuccess(midiAccess) {
+    for (var input of midiAccess.inputs.values()) {
+        input.onmidimessage = getMIDIMessage;
+    }
+}
+
+function onMIDIFailure() {
+    console.log('Could not access your MIDI devices.');
+}
+
+document.addEventListener('keydown', function (event) {
+   if (event.which >= 49 && event.which < 59) {
+      noteOn(event.which);
+   }
+});
+document.addEventListener('keyup', function (event) {
+   if (event.which >= 49 && event.which < 59) {
+      noteOff(event.which);
+   }
+});
+
+</script>
+<script>
+
+// Fire. Based on: https://www.ssaurel.com/fireeffect/fireeffect.htm
+window.setTimeout(function() {
+    var fireCanvas = document.getElementById('fireCanvas');
+    fireCanvas.width = window.innerWidth/3;
+    var ctx = fireCanvas.getContext('2d');
+    var canvasWidth = fireCanvas.width;
+    var canvasHeight = fireCanvas.height;
+    var fps = 18;
+    var threshold = 0.7;
+    var imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+    var data = imageData.data;
+    var numPixels = data.length / 4;
+
+    var colors = [];
+
+    for (var i = 0; i < 256; i++) {
+        var color = [];
+        color[0] = color[1] = color[2] = 0;
+        colors[i] = color;
+    }
+
+    for (var i = 0; i < 32; ++i) {
+        colors[i][2] = i << 1;
+        colors[i + 32][0] = i << 3;
+        colors[i + 32][2] = 64 - (i << 1);
+        colors[i + 64][0] = 255;
+        colors[i + 64][1] = i << 3;
+        colors[i + 96][0] = 255;
+        colors[i + 96][1] = 255;
+        colors[i + 96][2] = i << 2;
+        colors[i + 128][0] = 255;
+        colors[i + 128][1] = 255;
+        colors[i + 128][2] = 64 + (i << 2);
+        colors[i + 160][0] = 255;
+        colors[i + 160][1] = 255;
+        colors[i + 160][2] = 128 + (i << 2);
+        colors[i + 192][0] = 255;
+        colors[i + 192][1] = 255;
+        colors[i + 192][2] = 192 + i;
+        colors[i + 224][0] = 255;
+        colors[i + 224][1] = 255;
+        colors[i + 224][2] = 224 + i;
+    }
+
+    var fire = [];
+    // init fire array
+    for (var i = 0; i < canvasWidth * canvasHeight; i++) {
+        fire[i] = 0;
+    }
+
+    var time = new Date().getTime();
+
+    function burnBurnBurn() {
+        // request animation frame
+        window.requestAnimationFrame(burnBurnBurn);
+        var now = new Date().getTime();
+        dt = now - time;
+        
+        if (dt < (1000 / fps))
+            return; // skip a frame
+            
+        time = now;
+        
+        var bottomLine = canvasWidth * (canvasHeight - 1);
+        
+        // draw random pixels at the bottom line
+        for (var x = 18; x < canvasWidth-18; x++) {
+            var value = 0;
+            
+            if (Math.random() > threshold)
+                value = 255;
+                
+            fire[bottomLine + x] = value;
+        }
+        
+        // move flip upwards, start at bottom
+        var value = 0;
+        
+        for (var y = 0; y < canvasHeight; ++y) {
+            for (var x = 0; x < canvasWidth; ++x) {
+                if (x == 0) {
+                    value = fire[bottomLine];
+                    value += fire[bottomLine];
+                    value += fire[bottomLine - canvasWidth];
+                    value /= 3;
+                } else if (x == canvasWidth -1) {
+                    value = fire[bottomLine + x];
+                    value += fire[bottomLine - canvasWidth + x];
+                    value += fire[bottomLine + x - 1];
+                    value /= 3;
+                } else {
+                    value = fire[bottomLine + x];
+                    value += fire[bottomLine + x + 1];
+                    value += fire[bottomLine + x - 1];
+                    value += fire[bottomLine - canvasWidth + x];
+                    value /= 4;
+                }
+                
+                if (value > 1)
+                    value -= 1;
+                
+                value = Math.floor(value);
+                var index = bottomLine - canvasWidth + x;
+                fire[index] = value;
+            }
+            
+            bottomLine -= canvasWidth;
+        }
+        
+        var skipRows = 2; // skip the bottom 2 rows
+        
+        // render the flames using our color table
+        for (var y = skipRows; y < canvasHeight; ++y) {
+            for (var x = 0; x < canvasWidth; ++x) {
+                var index = y * canvasWidth * 4 + x * 4;
+                var value = fire[(y - skipRows) * canvasWidth + x];
+                
+                data[index] = colors[value][0];
+                data[++index] = colors[value][0];
+                data[++index] = colors[value][0];
+                data[++index] = 180;
+            }
+        }
+        
+        ctx.putImageData(imageData, 0, 0);
+    }        
+    requestAnimationFrame(burnBurnBurn);
+}, 1000);
+
+</script>
